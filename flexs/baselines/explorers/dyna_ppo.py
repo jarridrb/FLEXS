@@ -18,10 +18,13 @@ from tf_agents.environments.utils import validate_py_environment
 from tf_agents.networks import actor_distribution_network, value_network
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 
+import tf_agents.policies.tf_policy
+
 import flexs
 from flexs import baselines
 from flexs.baselines.explorers.environments.dyna_ppo import (
     DynaPPOEnvironment as DynaPPOEnv,
+    DynaPPOEnvironmentStoppableEpisode as DynaPPOStoppableEnv
 )
 from flexs.baselines.explorers.environments.dyna_ppo import (
     DynaPPOEnvironmentMutative as DynaPPOEnvMut,
@@ -54,33 +57,37 @@ class DynaPPOEnsemble(flexs.Model):
                 baselines.models.MLP(seq_len, 200, alphabet),
                 baselines.models.CNN(seq_len, 32, 100, alphabet),
                 # Sklearn models
-                baselines.models.LinearRegression(alphabet),
-                baselines.models.RandomForest(alphabet),
+                baselines.models.LinearRegression(alphabet, seq_len),
+                baselines.models.RandomForest(alphabet, seq_len),
                 baselines.models.SklearnRegressor(
                     sklearn.neighbors.KNeighborsRegressor(),
                     alphabet,
                     "nearest_neighbors",
+                    seq_len
                 ),
                 baselines.models.SklearnRegressor(
-                    sklearn.linear_model.Lasso(), alphabet, "lasso"
+                    sklearn.linear_model.Lasso(), alphabet, "lasso", seq_len
                 ),
                 baselines.models.SklearnRegressor(
                     sklearn.linear_model.BayesianRidge(),
                     alphabet,
                     "bayesian_ridge",
+                    seq_len
                 ),
                 baselines.models.SklearnRegressor(
                     sklearn.gaussian_process.GaussianProcessRegressor(),
                     alphabet,
                     "gaussian_process",
+                    seq_len
                 ),
                 baselines.models.SklearnRegressor(
                     sklearn.ensemble.GradientBoostingRegressor(),
                     alphabet,
                     "gradient_boosting",
+                    seq_len
                 ),
                 baselines.models.SklearnRegressor(
-                    sklearn.tree.ExtraTreeRegressor(), alphabet, "extra_trees"
+                    sklearn.tree.ExtraTreeRegressor(), alphabet, "extra_trees", seq_len
                 ),
             ]
 
@@ -123,7 +130,9 @@ class DynaPPOEnsemble(flexs.Model):
         ]
 
         if len(passing_models) == 0:
-            return self.models[np.argmax(self.r_squared_vals)].get_fitness(sequences)
+            val = np.argmax(self.r_squared_vals)
+            return self.models[val].get_fitness(sequences)
+            #return self.models[np.argmax(self.r_squared_vals)].get_fitness(sequences)
 
         return np.mean(
             [model.get_fitness(sequences) for model in passing_models], axis=0
@@ -165,6 +174,7 @@ class DynaPPO(flexs.Explorer):
         num_experiment_rounds: int = 10,
         num_model_rounds: int = 1,
         env_batch_size: int = 4,
+        min_proposal_seq_len: int = 7,
     ):
         """
         Args:
@@ -204,8 +214,9 @@ class DynaPPO(flexs.Explorer):
         self.num_experiment_rounds = num_experiment_rounds
         self.num_model_rounds = num_model_rounds
         self.env_batch_size = env_batch_size
+        self.min_proposal_seq_len = min_proposal_seq_len
 
-        env = DynaPPOEnv(
+        env = DynaPPOStoppableEnv(
             self.alphabet, len(starting_sequence), model, landscape, env_batch_size
         )
         self.tf_env = tf_py_environment.TFPyEnvironment(env)
@@ -244,8 +255,11 @@ class DynaPPO(flexs.Explorer):
         """
         for is_bound, obs in zip(experience.is_boundary(), experience.observation):
             if is_bound:
-                seq = s_utils.one_hot_to_string(obs.numpy()[:, :-1], self.alphabet)
+                seq = s_utils.one_hot_to_string(obs.numpy(), self.alphabet)
                 new_seqs[seq] = self.tf_env.get_cached_fitness(seq)
+
+    def _is_seq_long_enough(self, seq):
+        return len(seq) >= self.min_proposal_seq_len
 
     def propose_sequences(
         self, measured_sequences_data: pd.DataFrame
@@ -284,6 +298,8 @@ class DynaPPO(flexs.Explorer):
         ):
             collect_driver.run()
 
+        tf_agents.policies.tf_policy.num_iters += 1
+
         trajectories = replay_buffer.gather_all()
         self.agent.train(experience=trajectories)
         replay_buffer.clear()
@@ -302,15 +318,22 @@ class DynaPPO(flexs.Explorer):
             ):
                 collect_driver.run()
 
+
             trajectories = replay_buffer.gather_all()
             self.agent.train(experience=trajectories)
             replay_buffer.clear()
+
+
+        measured_seqs = set(measured_sequences_data["sequence"])
+        is_usable_seq = (
+            lambda x: x not in measured_seqs and self._is_seq_long_enough(x)
+        )
 
         # We propose the top `self.sequences_batch_size` new sequences we have generated
         sequences = {
             seq: fitness
             for seq, fitness in sequences.items()
-            if seq not in set(measured_sequences_data["sequence"])
+            if is_usable_seq(seq)
         }
         new_seqs = np.array(list(sequences.keys()))
         preds = np.array(list(sequences.values()))

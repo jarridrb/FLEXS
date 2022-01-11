@@ -109,3 +109,4 @@ venv.bak/
 
 fluorescence-model/
 cloud/runs/
+*csv

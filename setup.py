@@ -26,7 +26,7 @@ setuptools.setup(
         "torch>=0.4",
         "scikit-learn>=0.20",
         "tape-proteins",
-        "tensorflow>=2",
+        "tensorflow==2.4.0",
         "tf-agents>=0.7.1",
     ],
     include_package_data=True,

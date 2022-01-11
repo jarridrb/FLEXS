@@ -1,6 +1,7 @@
 """DyNA-PPO environment module."""
 import editdistance
 import numpy as np
+import tensorflow as tf
 from tf_agents.environments import py_environment
 from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
@@ -107,15 +108,20 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         """Get average distance to `seq` out of all observed sequences."""
         dens = 0
         dist_radius = 2
+        exactly_eq = False
         for s in self.all_seqs:
             dist = int(editdistance.eval(s, seq))
-            if dist != 0 and dist <= dist_radius:
-                dens += self.all_seqs[s] / dist
-        return dens
+            if dist <= dist_radius:
+                dens += self.all_seqs[s] / (dist + 1)
+            #elif dist == 0:
+            #    exactly_eq = True
+            #    break
+
+        return dens if not exactly_eq else np.inf
 
     def get_cached_fitness(self, seq):
         """Get cached sequence fitness computed in previous episodes."""
-        return self.all_seqs[seq]
+        return self.all_seqs[seq] if seq else 0.
 
     def set_fitness_model_to_gt(self, fitness_model_is_gt):
         """
@@ -152,15 +158,141 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         self.all_seqs.update(zip(complete_sequences, fitnesses))
 
         # Reward = fitness - lambda * sequence density
-        rewards = np.array(
-            [
-                f - self.lam * self.sequence_density(seq)
-                for seq, f in zip(complete_sequences, fitnesses)
-            ]
-        )
+        penalty = np.zeros(len(complete_sequences))
+        if not np.isclose(0., self.lam):
+            penalty = np.array([
+                self.lam * self.sequence_density(seq)
+                for seq in complete_sequences
+            ])
+
+        rewards = fitnesses - penalty
         return nest_utils.stack_nested_arrays(
             [ts.termination(seq_state, r) for seq_state, r in zip(self.states, rewards)]
         )
+
+
+class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable=W0223
+    def __init__(  # pylint: disable=W0231
+        self,
+        alphabet: str,
+        seq_length: int,
+        model: flexs.Model,
+        landscape: flexs.Landscape,
+        batch_size: int,
+    ):
+        super().__init__(alphabet, seq_length, model, landscape, batch_size)
+
+        self._action_spec = array_spec.BoundedArraySpec(
+            shape=(),
+            dtype=np.integer,
+            minimum=0,
+            maximum=len(self.alphabet),
+            name="action",
+        )
+
+        self.stop_action = len(alphabet)
+
+        self.terminal_transitions = {}
+
+    def _reset(self):
+        self.terminal_transitions = {}
+        return super()._reset()
+
+    def _compute_rewards_non_empty(self, seqs):
+        if len(seqs) == 0:
+            return []
+
+        if self.fitness_model_is_gt:
+            fitnesses = self.landscape.get_fitness(seqs)
+        else:
+            fitnesses = self.model.get_fitness(seqs)
+
+        # Reward = fitness - lambda * sequence density
+        penalty = np.zeros(len(seqs))
+        if not np.isclose(0., self.lam):
+            penalty = np.array([
+                self.lam * self.sequence_density(seq)
+                for seq in seqs
+            ])
+
+        self.all_seqs.update(zip(seqs, fitnesses))
+        rewards = fitnesses - penalty
+
+        return rewards
+
+    def _compute_reward(self, seqs_to_compute):
+        if len(seqs_to_compute) == 0:
+            return None
+
+        if len(seqs_to_compute.shape) == 2:
+            seqs_to_compute = np.expand_dims(seqs_to_compute, axis=0)
+
+        complete_sequences = [
+            s_utils.one_hot_to_string(seq_state, self.alphabet)
+            for seq_state in seqs_to_compute
+        ]
+
+        to_compute = list(filter(lambda x: x != '', complete_sequences))
+        non_empty_seqs_rewards = self._compute_rewards_non_empty(to_compute)
+
+        i, rewards = 0, np.zeros(len(complete_sequences))
+        for j, seq in enumerate(complete_sequences):
+            if seq:
+                rewards[j] = non_empty_seqs_rewards[i]
+                i += 1
+
+        return rewards
+
+    def _is_done_transition(self, action):
+        return (
+            action == self.stop_action or
+            self.partial_seq_len == self.seq_length
+        )
+
+    def _get_should_compute_reward_idx(self, actions):
+        active_idxs = ~self.current_time_step().is_last()
+
+        final_indicator_arr = None
+        if self.partial_seq_len == self.seq_length:
+            final_indicator_arr = active_idxs
+        else:
+            final_indicator_arr = active_idxs & (actions == self.stop_action)
+
+        return tf.reshape(tf.where(final_indicator_arr), -1)
+
+    def _step(self, actions):
+        """Progress the agent one step in the environment."""
+        current_time_step = self.current_time_step()
+        state_terminal_ind = current_time_step.is_last()
+
+        active_seq_actions = actions.flatten()[~state_terminal_ind]
+
+        insert_action_idxs = tf.where(active_seq_actions != self.stop_action)
+        insert_action_idxs = insert_action_idxs.numpy().flatten()
+        insert_actions = active_seq_actions[insert_action_idxs]
+
+        self.states[insert_action_idxs, self.partial_seq_len, -1] = 0
+        self.states[insert_action_idxs, self.partial_seq_len, insert_actions] = 1
+        self.partial_seq_len += 1
+
+        compute_rewards_idx = self._get_should_compute_reward_idx(actions)
+        rewards = self._compute_reward(self.states[compute_rewards_idx.numpy()])
+
+        transitions = []
+        for i in range(len(self.states)):
+            transition = None
+            if state_terminal_ind[i]:
+                transition = self.terminal_transitions[i]
+            elif i in compute_rewards_idx:
+                reward = rewards[tf.squeeze(tf.where(compute_rewards_idx == i))]
+                transition = ts.termination(self.states[i], reward)
+                self.terminal_transitions[i] = transition
+            else:
+                transition = ts.transition(self.states[i], 0)
+
+            transitions.append(transition)
+
+        return nest_utils.stack_nested_arrays(transitions)
 
 
 class DynaPPOEnvironmentMutative(py_environment.PyEnvironment):  # pylint: disable=W0223
@@ -268,11 +400,16 @@ class DynaPPOEnvironmentMutative(py_environment.PyEnvironment):  # pylint: disab
         """Get average distance to `seq` out of all observed sequences."""
         dens = 0
         dist_radius = 2
+        exactly_eq = False
         for s in self.all_seqs:
             dist = int(editdistance.eval(s, seq))
-            if dist != 0 and dist <= dist_radius:
-                dens += self.all_seqs[s] / dist
-        return dens
+            if dist <= dist_radius:
+                dens += self.all_seqs[s] / (dist + 1)
+            #elif dist == 0:
+            #    exactly_eq = True
+            #    break
+
+        return dens if not exactly_eq else np.inf
 
     def set_fitness_model_to_gt(self, fitness_model_is_gt):
         """
@@ -317,9 +454,11 @@ class DynaPPOEnvironmentMutative(py_environment.PyEnvironment):  # pylint: disab
             )
         self.all_seqs[state_string] = self._state["fitness"].item()
 
-        reward = self._state["fitness"].item() - self.lam * self.sequence_density(
-            state_string
-        )
+        penalty = 0.
+        if not np.isclose(0., self.lam):
+            penalty = self.lam * self.sequence_density(state_string)
+
+        reward = self._state["fitness"].item() - penalty
 
         # if we have seen the sequence this episode,
         # terminate episode and punish

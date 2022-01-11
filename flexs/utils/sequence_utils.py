@@ -29,7 +29,7 @@ def construct_mutant_from_sample(
     return one_hot
 
 
-def string_to_one_hot(sequence: str, alphabet: str) -> np.ndarray:
+def string_to_one_hot(sequence: str, alphabet: str, seq_len: int = None) -> np.ndarray:
     """
     Return the one-hot representation of a sequence string according to an alphabet.
 
@@ -41,7 +41,7 @@ def string_to_one_hot(sequence: str, alphabet: str) -> np.ndarray:
         One-hot numpy array of shape `(len(sequence), len(alphabet))`.
 
     """
-    out = np.zeros((len(sequence), len(alphabet)))
+    out = np.zeros((seq_len or len(sequence), len(alphabet)))
     for i in range(len(sequence)):
         out[i, alphabet.index(sequence[i])] = 1
     return out
@@ -63,7 +63,12 @@ def one_hot_to_string(
 
     """
     residue_idxs = np.argmax(one_hot, axis=1)
-    return "".join([alphabet[idx] for idx in residue_idxs])
+    chars = []
+    for idx in residue_idxs:
+        if idx < len(alphabet):
+            chars.append(alphabet[idx])
+
+    return "".join(chars)
 
 
 def generate_single_mutants(wt: str, alphabet: str) -> List[str]:

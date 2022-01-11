@@ -45,4 +45,5 @@ class GlobalEpistasisModel(keras_model.KerasModel):
             name=name,
             batch_size=batch_size,
             epochs=epochs,
+            seq_len=seq_len
         )

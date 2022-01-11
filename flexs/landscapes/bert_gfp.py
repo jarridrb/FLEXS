@@ -8,6 +8,21 @@ import torch
 
 import flexs
 
+def print_mem():
+    t = torch.cuda.get_device_properties(0).total_memory
+    r = torch.cuda.memory_reserved(0)
+    a = torch.cuda.memory_allocated(0)
+    f = r-a  # free inside reserved
+
+    print()
+    print('Total mem: %d' % t)
+    print('Reserved mem: %d' % r)
+    print('Allocated mem: %d' % a)
+    print('Free mem: %d' % f)
+    print()
+
+    if ((t - f) / t) > .99:
+        import pdb; pdb.set_trace()
 
 class BertGFPBrightness(flexs.Landscape):
     r"""
@@ -86,11 +101,11 @@ class BertGFPBrightness(flexs.Landscape):
         # Score sequences in batches of size 32
         for subset in np.array_split(sequences, max(1, len(sequences) // 32)):
             encoded_seqs = torch.tensor(
-                [self.tokenizer.encode(seq) for seq in subset]
+                np.array([self.tokenizer.encode(seq) for seq in subset])
             ).to(self.device)
 
             scores.append(
-                self.model(encoded_seqs)[0].detach().numpy().astype(float).reshape(-1)
+                self.model(encoded_seqs)[0].detach().cpu().numpy().astype(float).reshape(-1)
             )
 
         return np.concatenate(scores)

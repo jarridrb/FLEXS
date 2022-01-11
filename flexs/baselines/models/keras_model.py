@@ -21,6 +21,7 @@ class KerasModel(flexs.Model):
         epochs=20,
         custom_train_function: Callable[[tf.Tensor, tf.Tensor], None] = None,
         custom_predict_function: Callable[[tf.Tensor], np.ndarray] = None,
+        seq_len = None,
     ):
         """
         Wrap a tensorflow/keras model.
@@ -45,6 +46,7 @@ class KerasModel(flexs.Model):
         self.name = name
         self.epochs = epochs
         self.batch_size = batch_size
+        self.seq_len = seq_len
 
     def train(
         self, sequences: SEQUENCES_TYPE, labels: np.ndarray, verbose: bool = False
@@ -52,7 +54,7 @@ class KerasModel(flexs.Model):
         """Train keras model."""
         one_hots = tf.convert_to_tensor(
             np.array(
-                [s_utils.string_to_one_hot(seq, self.alphabet) for seq in sequences]
+                [s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len) for seq in sequences]
             ),
             dtype=tf.float32,
         )
@@ -69,7 +71,7 @@ class KerasModel(flexs.Model):
     def _fitness_function(self, sequences):
         one_hots = tf.convert_to_tensor(
             np.array(
-                [s_utils.string_to_one_hot(seq, self.alphabet) for seq in sequences]
+                [s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len) for seq in sequences]
             ),
             dtype=tf.float32,
         )
