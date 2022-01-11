@@ -11,6 +11,7 @@ import sklearn.gaussian_process
 import sklearn.linear_model
 import sklearn.tree
 import tensorflow as tf
+from sklearn.gaussian_process.kernels import RBF, RationalQuadratic, Matern
 from tf_agents.agents.ppo import ppo_agent
 from tf_agents.drivers import dynamic_episode_driver
 from tf_agents.environments import tf_py_environment
@@ -52,48 +53,94 @@ class DynaPPOEnsemble(flexs.Model):
 
         if models is None:
             models = [
-                # FLEXS models
-                baselines.models.GlobalEpistasisModel(seq_len, 100, alphabet),
-                baselines.models.MLP(seq_len, 200, alphabet),
-                baselines.models.CNN(seq_len, 32, 100, alphabet),
-                # Sklearn models
-                baselines.models.LinearRegression(alphabet, seq_len),
-                baselines.models.RandomForest(alphabet, seq_len),
+                baselines.models.CNNEnsemble(alphabet, seq_len),
                 baselines.models.SklearnRegressor(
-                    sklearn.neighbors.KNeighborsRegressor(),
+                    sklearn.neighbors.KNeighborsRegressor,
                     alphabet,
                     "nearest_neighbors",
-                    seq_len
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'n_neighbors': [2, 5, 10, 15]
+                    },
+                    nfolds=5,
                 ),
                 baselines.models.SklearnRegressor(
-                    sklearn.linear_model.Lasso(), alphabet, "lasso", seq_len
-                ),
-                baselines.models.SklearnRegressor(
-                    sklearn.linear_model.BayesianRidge(),
+                    sklearn.linear_model.BayesianRidge,
                     alphabet,
                     "bayesian_ridge",
-                    seq_len
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'alpha_1': [1e-5, 1e-6, 1e-7]
+                        'alpha_2': [1e-5, 1e-6, 1e-7]
+                        'lambda_1': [1e-5, 1e-6, 1e-7]
+                        'lambda_1': [1e-5, 1e-6, 1e-7]
+                    },
+                    nfolds=5,
+                ),
+                baselines.models.RandomForest(
+                    alphabet,
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'max_depth': [8, None]
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
+                        'n_estimators': [10, 100, 200]
+                    },
+                    nfolds=5,
                 ),
                 baselines.models.SklearnRegressor(
-                    sklearn.gaussian_process.GaussianProcessRegressor(),
+                    sklearn.tree.ExtraTreeRegressor,
+                    alphabet,
+                    "extra_trees",
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'max_depth': [8, None]
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
+                        'n_estimators': [10, 100, 200]
+                    },
+                    nfolds=5,
+                ),
+                baselines.models.SklearnRegressor(
+                    sklearn.gaussian_process.GaussianProcessRegressor,
                     alphabet,
                     "gaussian_process",
-                    seq_len
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'kernel': [RBF, RationalQuadratic, Matern],
+                    },
+                    nfolds=5,
                 ),
                 baselines.models.SklearnRegressor(
-                    sklearn.ensemble.GradientBoostingRegressor(),
+                    sklearn.ensemble.GradientBoostingRegressor,
                     alphabet,
                     "gradient_boosting",
-                    seq_len
-                ),
-                baselines.models.SklearnRegressor(
-                    sklearn.tree.ExtraTreeRegressor(), alphabet, "extra_trees", seq_len
+                    seq_len,
+                    hparam_tune=True,
+                    hparams_to_search={
+                        'max_depth': [8, None]
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
+                        'learning_rate': [1., 1e-1, 1e-2]
+                    },
+                    nfolds=5,
                 ),
             ]
 
         self.models = models
         self.r_squared_vals = np.ones(len(self.models))
         self.r_squared_threshold = r_squared_threshold
+
+    def train(self, sequences, labels):
+        if len(sequences) < 10:
+            return
+
+        self.r_squared_vals = [
+            model.train(sequences, labels)
+            for model in self.models
+        ]
 
     def train(self, sequences, labels):
         """Train the ensemble, calculating $r^2$ values on a holdout set."""

@@ -4,6 +4,7 @@ import abc
 import numpy as np
 import sklearn.ensemble
 import sklearn.linear_model
+import sklearn.metrics
 
 import flexs
 from flexs.utils import sequence_utils as s_utils
@@ -12,7 +13,16 @@ from flexs.utils import sequence_utils as s_utils
 class SklearnModel(flexs.Model, abc.ABC):
     """Base sklearn model wrapper."""
 
-    def __init__(self, model, alphabet, name, seq_len):
+    def __init__(
+        self,
+        model_type,
+        alphabet,
+        name,
+        seq_len,
+        hparam_tune=False,
+        hparams_to_search={},
+        nfolds=None
+    ):
         """
         Args:
             model: sklearn model to wrap.
@@ -22,12 +32,31 @@ class SklearnModel(flexs.Model, abc.ABC):
         """
         super().__init__(name)
 
-        self.model = model
+        self.model_type = model_type
         self.alphabet = alphabet
         self.seq_len = seq_len
+        self.hparam_tune = hparam_tune
 
-    def train(self, sequences, labels):
+        self.model = None
+
+    def _train_hparam_setting(
+        train_seq,
+        train_label,
+        val_seq,
+        val_labels,
+        **hparam_kwargs
+    ):
+        self._train(train_seq, train_label, **hparam_kwargs)
+
+        val_X = self._seq_to_one_hot(val_seq)
+        val_preds = self.model.get_fitness(val_X)
+
+        return sklearn.metrics.r2_score(val_labels, val_preds)
+
+    def _train(self, sequences, labels, **hparam_kwargs):
         """Flatten one-hot sequences and train model using `model.fit`."""
+        self.model = self.model_type(**hparam_kwargs)
+
         one_hots = np.array([
             s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len)
             for seq in sequences
@@ -71,25 +100,70 @@ class SklearnClassifier(SklearnModel, abc.ABC):
 class LinearRegression(SklearnRegressor):
     """Sklearn linear regression."""
 
-    def __init__(self, alphabet, seq_len, **kwargs):
+    def __init__(
+        self,
+        alphabet,
+        seq_len,
+        hparam_tune=False,
+        hparams_to_search={},
+        nfolds=None
+    ):
         """Create linear regression model."""
-        model = sklearn.linear_model.LinearRegression(**kwargs)
-        super().__init__(model, alphabet, "linear_regression", seq_len)
+        model = sklearn.linear_model.LinearRegression
+        super().__init__(
+            model,
+            alphabet,
+            "linear_regression",
+            seq_len,
+            hparam_tune,
+            hparams_to_search,
+            nfolds
+        )
 
 
 class LogisticRegression(SklearnRegressor):
     """Sklearn logistic regression."""
 
-    def __init__(self, alphabet, seq_len, **kwargs):
+    def __init__(
+        self,
+        alphabet,
+        seq_len,
+        hparam_tune=False,
+        hparams_to_search={},
+        nfolds=None
+    ):
         """Create logistic regression model."""
-        model = sklearn.linear_model.LogisticRegression(**kwargs)
-        super().__init__(model, alphabet, "logistic_regression", seq_len)
+        model = sklearn.linear_model.LogisticRegression
+        super().__init__(
+            model,
+            alphabet,
+            "logistic_regression",
+            seq_len,
+            hparam_tune,
+            hparams_to_search,
+            nfolds
+        )
 
 
 class RandomForest(SklearnRegressor):
     """Sklearn random forest regressor."""
 
-    def __init__(self, alphabet, seq_len, **kwargs):
+    def __init__(
+        self,
+        alphabet,
+        seq_len,
+        hparam_tune=False,
+        hparams_to_search={},
+        nfolds=None
+    ):
         """Create random forest regressor."""
-        model = sklearn.ensemble.RandomForestRegressor(**kwargs)
-        super().__init__(model, alphabet, "random_forest", seq_len)
+        model = sklearn.ensemble.RandomForestRegressor
+        super().__init__(
+            model,
+            alphabet,
+            "random_forest",
+            seq_len,
+            hparam_tune,
+            hparams_to_search,
+            nfolds
+        )

@@ -149,15 +149,17 @@ class Explorer(abc.ABC):
         )
         self._log(sequences_data, metadata, 0, verbose, time.time())
 
+        dataset = landscape.get_dataset()
+
         # For each round, train model on available data, propose sequences,
         # measure them on the true landscape, add to available data, and repeat.
         range_iterator = range if verbose else tqdm.trange
         for r in range_iterator(1, self.rounds + 1):
             round_start_time = time.time()
-            self.model.train(
-                sequences_data["sequence"].to_numpy(),
-                sequences_data["true_score"].to_numpy(),
-            )
+
+            all_X, all_y = dataset.get_full_dataset()
+
+            self.model.train(all_X, all_y)
 
             seqs, preds = self.propose_sequences(sequences_data)
             true_score = landscape.get_fitness(seqs)
@@ -166,6 +168,8 @@ class Explorer(abc.ABC):
                 warnings.warn(
                     "Must propose <= `self.sequences_batch_size` sequences per round"
                 )
+
+            dataset.add(seqs, true_score)
 
             sequences_data = sequences_data.append(
                 pd.DataFrame(

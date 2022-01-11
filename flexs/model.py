@@ -1,6 +1,8 @@
 """Defines base Model class."""
 import abc
 from typing import Any, List
+from sklearn.model_selection import KFold
+from collections import OrderedDict
 
 import numpy as np
 
@@ -14,9 +16,46 @@ class Model(flexs.Landscape, abc.ABC):
     `train` method.
 
     """
+    def __init__(self, name, hparam_tune=False, hparams_to_search={}, nfolds=None):
+        super().__init__(name)
+        self.hparam_tune = hparam_tune
+        self.hparams_to_search = OrderedDict(hparams_to_search)
+        self.nfolds = nfolds
+
+
+    def train(self, sequences: SEQUENCES_TYPE, labels: List[Any]):
+        if not self.hparam_tune:
+            return self._train(sequences, labels)
+
+        best_conf, best_score = None, None
+        kfold = KFold(n_splits=self.nfolds, shuffle=True)
+        for hparam_setting in product(self.hparams_to_search.values()):
+            hparam_keys = self.hparams_to_search.keys()
+            hparam_kwargs = {
+                keys[i]: hparam_setting[i]
+                for i in range(len(hparam_keys))
+            }
+
+            r_squareds = np.array([
+                self._train_hparam_setting(
+                    sequences[train_idx],
+                    labels[train_idx],
+                    sequences[val_idx],
+                    labels[val_idx],
+                    **hparam_kwargs
+                )
+                for train_idx, val_idx in kfold.split(sequences)
+            ])
+
+            mean_r_squared = r_squareds.mean()
+            if best_score is None or mean_r_squared >= best_score:
+                best_score = mean_r_squared
+                best_conf = hparam_kwargs
+
+        self._train(sequences, labels, **best_conf)
 
     @abc.abstractmethod
-    def train(self, sequences: SEQUENCES_TYPE, labels: List[Any]):
+    def _train(self, sequences: SEQUENCES_TYPE, labels: List[Any], **hparam_kwargs):
         """
         Train model.
 
@@ -24,6 +63,9 @@ class Model(flexs.Landscape, abc.ABC):
         based on the set of sequences it has measurements for.
 
         """
+        pass
+
+    def _train_hparam_setting(self, seq_train, label_train, seq_val, label_val, **hparams):
         pass
 
 
@@ -49,6 +91,6 @@ class LandscapeAsModel(Model):
     def _fitness_function(self, sequences: SEQUENCES_TYPE) -> np.ndarray:
         return self.landscape._fitness_function(sequences)
 
-    def train(self, sequences: SEQUENCES_TYPE, labels: List[Any]):
+    def _train(self, sequences: SEQUENCES_TYPE, labels: List[Any], **hparam_kwargs):
         """No-op."""
         pass
