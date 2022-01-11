@@ -8,6 +8,8 @@ amp_landscape = flexs.landscapes.AMPLandscape(
     oracle_type='MLP',
     oracle_features='AlBert',
     medoid_oracle_norm=1,
+    proxy_data_split='D1',
+    num_folds=5,
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
     batch_size=256
 )

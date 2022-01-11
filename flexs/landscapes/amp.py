@@ -33,6 +33,8 @@ class AMPLandscape(flexs.Landscape):
         oracle_type,
         oracle_features,
         medoid_oracle_norm,
+        proxy_data_split,
+        num_folds,
         device,
         batch_size=256
     ):
@@ -40,7 +42,6 @@ class AMPLandscape(flexs.Landscape):
         Create AMP landscape.
         """
         super().__init__(name="AMP")
-
 
         self.oracle = get_test_oracle(oracle_split,
                                       model=oracle_type,
@@ -51,6 +52,15 @@ class AMPLandscape(flexs.Landscape):
         self.oracle.to(device)
 
         self.batch_size = batch_size
+
+        self.dataset = AMPBinaryClassificationDataset(
+            proxy_data_split,
+            num_folds,
+            self.oracle
+        )
+
+    def get_dataset(self):
+        return self.dataset
 
     def _fitness_function(self, sequences):
         sequences = np.array(sequences)
