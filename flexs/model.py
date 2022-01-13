@@ -3,6 +3,7 @@ import abc
 from typing import Any, List
 from sklearn.model_selection import KFold
 from collections import OrderedDict
+from itertools import product
 
 import numpy as np
 
@@ -29,11 +30,11 @@ class Model(flexs.Landscape, abc.ABC):
 
         best_conf, best_score = None, None
         kfold = KFold(n_splits=self.nfolds, shuffle=True)
-        for hparam_setting in product(self.hparams_to_search.values()):
+        for hparam_setting in product(*self.hparams_to_search.values()):
             hparam_keys = self.hparams_to_search.keys()
             hparam_kwargs = {
-                keys[i]: hparam_setting[i]
-                for i in range(len(hparam_keys))
+                key: hparam_setting[i]
+                for i, key in enumerate(hparam_keys)
             }
 
             r_squareds = np.array([
@@ -51,8 +52,11 @@ class Model(flexs.Landscape, abc.ABC):
             if best_score is None or mean_r_squared >= best_score:
                 best_score = mean_r_squared
                 best_conf = hparam_kwargs
+                break
 
+        print('Had best R squared of %f for %s' % (best_score, self.name))
         self._train(sequences, labels, **best_conf)
+        return best_score
 
     @abc.abstractmethod
     def _train(self, sequences: SEQUENCES_TYPE, labels: List[Any], **hparam_kwargs):

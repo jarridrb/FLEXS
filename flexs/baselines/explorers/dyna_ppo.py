@@ -53,7 +53,7 @@ class DynaPPOEnsemble(flexs.Model):
 
         if models is None:
             models = [
-                baselines.models.CNNEnsemble(alphabet, seq_len),
+                baselines.models.CNNEnsemble(seq_len, alphabet),
                 baselines.models.SklearnRegressor(
                     sklearn.neighbors.KNeighborsRegressor,
                     alphabet,
@@ -61,7 +61,7 @@ class DynaPPOEnsemble(flexs.Model):
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
-                        'n_neighbors': [2, 5, 10, 15]
+                        'n_neighbors': [2, 5, 10, 15],
                     },
                     nfolds=5,
                 ),
@@ -72,10 +72,10 @@ class DynaPPOEnsemble(flexs.Model):
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
-                        'alpha_1': [1e-5, 1e-6, 1e-7]
-                        'alpha_2': [1e-5, 1e-6, 1e-7]
-                        'lambda_1': [1e-5, 1e-6, 1e-7]
-                        'lambda_1': [1e-5, 1e-6, 1e-7]
+                        'alpha_1': [1e-5, 1e-6, 1e-7],
+                        'alpha_2': [1e-5, 1e-6, 1e-7],
+                        'lambda_1': [1e-5, 1e-6, 1e-7],
+                        'lambda_1': [1e-5, 1e-6, 1e-7],
                     },
                     nfolds=5,
                 ),
@@ -84,9 +84,9 @@ class DynaPPOEnsemble(flexs.Model):
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
-                        'max_depth': [8, None]
-                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
-                        'n_estimators': [10, 100, 200]
+                        'max_depth': [8, None],
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len],
+                        'n_estimators': [10, 100, 200],
                     },
                     nfolds=5,
                 ),
@@ -97,23 +97,22 @@ class DynaPPOEnsemble(flexs.Model):
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
-                        'max_depth': [8, None]
-                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
-                        'n_estimators': [10, 100, 200]
+                        'max_depth': [8, None],
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len],
                     },
                     nfolds=5,
                 ),
-                baselines.models.SklearnRegressor(
-                    sklearn.gaussian_process.GaussianProcessRegressor,
-                    alphabet,
-                    "gaussian_process",
-                    seq_len,
-                    hparam_tune=True,
-                    hparams_to_search={
-                        'kernel': [RBF, RationalQuadratic, Matern],
-                    },
-                    nfolds=5,
-                ),
+                #baselines.models.SklearnRegressor(
+                #    sklearn.gaussian_process.GaussianProcessRegressor,
+                #    alphabet,
+                #    "gaussian_process",
+                #    seq_len,
+                #    hparam_tune=True,
+                #    hparams_to_search={
+                #        'kernel': [RBF(), RationalQuadratic(), Matern()],
+                #    },
+                #    nfolds=5,
+                #),
                 baselines.models.SklearnRegressor(
                     sklearn.ensemble.GradientBoostingRegressor,
                     alphabet,
@@ -121,9 +120,9 @@ class DynaPPOEnsemble(flexs.Model):
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
-                        'max_depth': [8, None]
-                        'max_features': [seq_len // 4, seq_len // 2, seq_len]
-                        'learning_rate': [1., 1e-1, 1e-2]
+                        'max_depth': [8, None],
+                        'max_features': [seq_len // 4, seq_len // 2, seq_len],
+                        'learning_rate': [1., 1e-1, 1e-2],
                     },
                     nfolds=5,
                 ),
@@ -133,7 +132,7 @@ class DynaPPOEnsemble(flexs.Model):
         self.r_squared_vals = np.ones(len(self.models))
         self.r_squared_threshold = r_squared_threshold
 
-    def train(self, sequences, labels):
+    def _train(self, sequences, labels):
         if len(sequences) < 10:
             return
 
@@ -141,33 +140,6 @@ class DynaPPOEnsemble(flexs.Model):
             model.train(sequences, labels)
             for model in self.models
         ]
-
-    def train(self, sequences, labels):
-        """Train the ensemble, calculating $r^2$ values on a holdout set."""
-        if len(sequences) < 10:
-            return
-
-        (train_X, test_X, train_y, test_y,) = sklearn.model_selection.train_test_split(
-            np.array(sequences), np.array(labels), test_size=0.25
-        )
-
-        # Train each model in the ensemble
-        for model in self.models:
-            model.train(train_X, train_y)
-
-        # Calculate r^2 values for each model in the ensemble on test set
-        self.r_squared_vals = []
-        for model in self.models:
-            y_preds = model.get_fitness(test_X)
-
-            # If either `y_preds` or `test_y` are constant, we can't calculate r^2,
-            # so assign an r^2 value of zero.
-            if (y_preds[0] == y_preds).all() or (test_y[0] == test_y).all():
-                self.r_squared_vals.append(0)
-            else:
-                self.r_squared_vals.append(
-                    scipy.stats.pearsonr(test_y, model.get_fitness(test_X))[0] ** 2
-                )
 
     def _fitness_function(self, sequences):
         passing_models = [
@@ -184,6 +156,23 @@ class DynaPPOEnsemble(flexs.Model):
         return np.mean(
             [model.get_fitness(sequences) for model in passing_models], axis=0
         )
+
+
+    def _fitness_function_uncert(self, sequences):
+        passing_models = [
+            model
+            for model, r_squared in zip(self.models, self.r_squared_vals)
+            if r_squared >= self.r_squared_threshold
+        ]
+
+        if len(passing_models) == 0:
+            val = np.argmax(self.r_squared_vals)
+            return self.models[val].get_fitness(sequences)
+            #return self.models[np.argmax(self.r_squared_vals)].get_fitness(sequences)
+
+        preds = np.array([model.get_fitness(sequences) for model in passing_models])
+
+        return preds.mean(axis=0), preds.std(axis=0)
 
 
 class DynaPPO(flexs.Explorer):
@@ -242,10 +231,10 @@ class DynaPPO(flexs.Explorer):
             )
             # Some models in the ensemble need to be trained on dummy dataset before
             # they can predict
-            model.train(
-                s_utils.generate_random_sequences(len(starting_sequence), 10, alphabet),
-                [0] * 10,
-            )
+            #model.train(
+            #    s_utils.generate_random_sequences(len(starting_sequence), 10, alphabet),
+            #    [0] * 10,
+            #)
 
         super().__init__(
             model,
@@ -289,6 +278,11 @@ class DynaPPO(flexs.Explorer):
         )
         self.agent.initialize()
 
+        self.inner_rounds_iter = 0
+        self.should_terminate_round = False
+        self.highest_uncert = 0.0
+        self.uncert_thresh = 0.5
+
     def add_last_seq_in_trajectory(self, experience, new_seqs):
         """Add the last sequence in an episode's trajectory.
 
@@ -304,6 +298,15 @@ class DynaPPO(flexs.Explorer):
             if is_bound:
                 seq = s_utils.one_hot_to_string(obs.numpy(), self.alphabet)
                 new_seqs[seq] = self.tf_env.get_cached_fitness(seq)
+
+                if self.tf_env.fitness_model_is_gt:
+                    continue
+
+                uncert = self.tf_env.get_cached_uncertainty(seq)
+                if self.inner_rounds_iter == 1 and uncert >= self.highest_uncert:
+                    self.highest_uncert = uncert
+                elif self.inner_rounds_iter > 1 and uncert >= (1 + self.uncert_thresh) * self.highest_uncert:
+                    self.should_terminate_round = True
 
     def _is_seq_long_enough(self, seq):
         return len(seq) >= self.min_proposal_seq_len
@@ -353,6 +356,8 @@ class DynaPPO(flexs.Explorer):
         sequences.clear()
 
         # Model-based training rounds
+        self.should_terminate_round = False
+        self.inner_rounds_iter = 1
         self.tf_env.set_fitness_model_to_gt(False)
         previous_model_cost = self.model.cost
         for _ in range(self.num_model_rounds):
@@ -364,11 +369,13 @@ class DynaPPO(flexs.Explorer):
                 self.model_queries_per_batch / self.num_model_rounds
             ):
                 collect_driver.run()
-
+                if self.should_terminate_round:
+                    break
 
             trajectories = replay_buffer.gather_all()
             self.agent.train(experience=trajectories)
             replay_buffer.clear()
+            self.inner_rounds_iter += 1
 
 
         measured_seqs = set(measured_sequences_data["sequence"])

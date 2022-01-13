@@ -30,7 +30,7 @@ class SklearnModel(flexs.Model, abc.ABC):
             name: Human-readable short model descriptipon (for logging).
 
         """
-        super().__init__(name)
+        super().__init__(name, hparam_tune, hparams_to_search, nfolds)
 
         self.model_type = model_type
         self.alphabet = alphabet
@@ -40,6 +40,7 @@ class SklearnModel(flexs.Model, abc.ABC):
         self.model = None
 
     def _train_hparam_setting(
+        self,
         train_seq,
         train_label,
         val_seq,
@@ -47,24 +48,28 @@ class SklearnModel(flexs.Model, abc.ABC):
         **hparam_kwargs
     ):
         self._train(train_seq, train_label, **hparam_kwargs)
-
-        val_X = self._seq_to_one_hot(val_seq)
-        val_preds = self.model.get_fitness(val_X)
+        val_preds = self._fitness_function(val_seq)
 
         return sklearn.metrics.r2_score(val_labels, val_preds)
+
+    def _seqs_to_one_hot(self, seqs):
+        one_hots = np.array([
+            s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len)
+            for seq in seqs
+        ])
+
+        flattened = one_hots.reshape(
+            one_hots.shape[0], one_hots.shape[1] * one_hots.shape[2]
+        )
+
+        return flattened
 
     def _train(self, sequences, labels, **hparam_kwargs):
         """Flatten one-hot sequences and train model using `model.fit`."""
         self.model = self.model_type(**hparam_kwargs)
 
-        one_hots = np.array([
-            s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len)
-            for seq in sequences
-        ])
-        flattened = one_hots.reshape(
-            one_hots.shape[0], one_hots.shape[1] * one_hots.shape[2]
-        )
-        self.model.fit(flattened, labels)
+        one_hots = self._seqs_to_one_hot(sequences)
+        self.model.fit(one_hots, labels)
 
 
 class SklearnRegressor(SklearnModel, abc.ABC):

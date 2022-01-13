@@ -15,15 +15,15 @@ amp_landscape = flexs.landscapes.AMPLandscape(
 )
 
 #starting_sequence = flexs.landscapes.AMPLandscape.starts[0]
-starting_sequence = ''.join(['A' for _ in range(53)])
+starting_sequence = ''.join(['A' for _ in range(60)])
 
 dynappo_explorer = baselines.explorers.DynaPPO(
     landscape=amp_landscape,
     env_batch_size=10,
-    num_model_rounds=10,
+    num_model_rounds=20,
     rounds=15,
     starting_sequence=starting_sequence,
-    sequences_batch_size=100,
+    sequences_batch_size=1000,
     model_queries_per_batch=1000,
     alphabet=s_utils.AAS,
 )

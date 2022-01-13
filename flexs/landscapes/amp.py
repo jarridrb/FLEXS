@@ -1,7 +1,11 @@
 """Defines the AMP landscape."""
 import numpy as np
 import flexs
+from collections import namedtuple
 from clamp_common_eval.defaults import get_test_oracle
+from gflownet_generator.lib.dataset.classification import (
+    BinaryClassificationDataset as AMPBinaryClassificationDataset
+)
 
 
 class AMPLandscape(flexs.Landscape):
@@ -53,9 +57,12 @@ class AMPLandscape(flexs.Landscape):
 
         self.batch_size = batch_size
 
+        Args = namedtuple('Args', ['save_scores_path'])
+        args = Args('/home/mila/j/jarrid.rector-brooks/repos/gflownet-generator/gflownet_generator/cached_scores')
         self.dataset = AMPBinaryClassificationDataset(
             proxy_data_split,
             num_folds,
+            args,
             self.oracle
         )
 

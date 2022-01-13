@@ -26,7 +26,7 @@ class Landscape(abc.ABC):
     def _fitness_function(self, sequences: SEQUENCES_TYPE) -> np.ndarray:
         pass
 
-    def get_fitness(self, sequences: SEQUENCES_TYPE) -> np.ndarray:
+    def get_fitness(self, sequences: SEQUENCES_TYPE, compute_uncert=False) -> np.ndarray:
         """
         Score a list/numpy array of sequences.
 
@@ -42,4 +42,7 @@ class Landscape(abc.ABC):
 
         """
         self.cost += len(sequences)
-        return self._fitness_function(sequences)
+        if compute_uncert:
+            return self._fitness_function_uncert(sequences)
+        else:
+            return self._fitness_function(sequences)

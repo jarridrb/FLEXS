@@ -169,7 +169,7 @@ class Explorer(abc.ABC):
                     "Must propose <= `self.sequences_batch_size` sequences per round"
                 )
 
-            dataset.add(seqs, true_score)
+            dataset.add((seqs, true_score))
 
             sequences_data = sequences_data.append(
                 pd.DataFrame(

@@ -110,3 +110,4 @@ venv.bak/
 fluorescence-model/
 cloud/runs/
 *csv
+sbatch.sh

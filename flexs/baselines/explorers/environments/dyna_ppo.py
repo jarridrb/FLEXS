@@ -56,6 +56,7 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
 
         # sequence
         self.all_seqs = {}
+        self.all_seqs_uncert = {}
         self.lam = 0.1
 
         # tf_agents environment
@@ -123,6 +124,9 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         """Get cached sequence fitness computed in previous episodes."""
         return self.all_seqs[seq] if seq else 0.
 
+    def get_cached_uncertainty(self, seq):
+        return self.all_seqs_uncert[seq] if seq else 0.
+
     def set_fitness_model_to_gt(self, fitness_model_is_gt):
         """
         Set the fitness model to the ground truth landscape or to the model.
@@ -154,8 +158,14 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         if self.fitness_model_is_gt:
             fitnesses = self.landscape.get_fitness(complete_sequences)
         else:
-            fitnesses = self.model.get_fitness(complete_sequences)
+            fitnesses, uncerts = self.model.get_fitness(
+                complete_sequences,
+                compute_uncert=True
+            )
+
         self.all_seqs.update(zip(complete_sequences, fitnesses))
+        if not self.fitness_model_is_gt:
+            self.all_seqs_uncert.update(zip(complete_sequences, uncerts))
 
         # Reward = fitness - lambda * sequence density
         penalty = np.zeros(len(complete_sequences))
@@ -205,7 +215,7 @@ class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable
         if self.fitness_model_is_gt:
             fitnesses = self.landscape.get_fitness(seqs)
         else:
-            fitnesses = self.model.get_fitness(seqs)
+            fitnesses, uncerts = self.model.get_fitness(seqs, compute_uncert=True)
 
         # Reward = fitness - lambda * sequence density
         penalty = np.zeros(len(seqs))
@@ -216,8 +226,10 @@ class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable
             ])
 
         self.all_seqs.update(zip(seqs, fitnesses))
-        rewards = fitnesses - penalty
+        if not self.fitness_model_is_gt:
+            self.all_seqs_uncert.update(zip(seqs, uncerts))
 
+        rewards = fitnesses - penalty
         return rewards
 
     def _compute_reward(self, seqs_to_compute):

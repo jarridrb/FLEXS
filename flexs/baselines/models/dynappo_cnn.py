@@ -1,8 +1,10 @@
 """Define a baseline CNN Model."""
+import numpy as np
 import tensorflow as tf
 
 import flexs
 import sklearn.metrics
+from flexs.utils import sequence_utils as s_utils
 from . import keras_model
 
 class CNNEnsemble(flexs.Model):
@@ -21,20 +23,13 @@ class CNNEnsemble(flexs.Model):
             nfolds=5,
         )
 
-    def _create_ensemble(self, lr):
-        models = [self._create_cnn(seq_len, alphabet) for _ in range(10)]
-        self.model = tf.keras.layers.Average([m.outputs[0] for m in models])
-
-        self.model.compile(
-            loss='MSE',
-            optimizer=tf.keras.optimizer.Adam(learning_rate=lr),
-            metrics=['mse']
-        )
+    def _create_ensemble(self, lr, ensemble_size=10):
+        self.models = [self._create_cnn(lr) for _ in range(ensemble_size)]
 
     def _seqs_to_tensor(self, seqs):
         one_hots = np.array([
             s_utils.string_to_one_hot(seq, self.alphabet, self.seq_len)
-            for seq in sequences
+            for seq in seqs
         ])
 
         return tf.convert_to_tensor(one_hots, dtype=tf.float32)
@@ -48,7 +43,7 @@ class CNNEnsemble(flexs.Model):
         epochs=20,
         lr=1e-3
     ):
-        self._create_ensemble(lr)
+        self._create_ensemble(lr, ensemble_size=1)
 
         train_one_hots = self._seqs_to_tensor(train_seq)
         val_one_hots = self._seqs_to_tensor(val_seq)
@@ -56,44 +51,47 @@ class CNNEnsemble(flexs.Model):
         train_label = tf.convert_to_tensor(train_label)
         val_label = tf.convert_to_tensor(val_label)
 
-        callbacks = [tf.keras.callbacks.EarlyStopping(patience=1)]
-        self.model.fit(
-            x=train_one_hots,
-            y=train_label,
-            batch_size=256,
-            epochs=epochs,
-            callbacks=callbacks,
-            validation_data=(val_one_hots, val_label)
-        )
+        r2_vals = []
+        for model in self.models:
+            model.fit(
+                x=train_one_hots,
+                y=train_label,
+                batch_size=256,
+                epochs=epochs,
+            )
 
-        val_preds = self.model.predict(val_one_hots, batch_size=256).squeeze(axis=1)
-        return sklearn.metrics.r2_score(val_label.numpy(), val_preds.numpy())
+            val_preds = model.predict(val_one_hots, batch_size=256).squeeze(axis=1)
+            r2_vals.append(
+                sklearn.metrics.r2_score(val_label.numpy(), val_preds)
+            )
 
-    def _train(self, sequences, labels, epochs=20, lr=1e-3):
+        return np.array(r2_vals).mean()
+
+    def _train(self, sequences, labels, **hparam_kwargs):
+        epochs, lr = hparam_kwargs['epochs'], hparam_kwargs['lr']
+
         self._create_ensemble(lr)
 
-        one_hots = = self._seqs_to_tensor(sequences)
+        one_hots = self._seqs_to_tensor(sequences)
         labels = tf.convert_to_tensor(labels)
 
-        callbacks = [tf.keras.callbacks.EarlyStopping(patience=1)]
-        self.model.fit(
-            x=train_one_hots,
-            y=train_label,
-            batch_size=256,
-            epochs=epochs,
-            callbacks=callbacks,
-            validation_data=(val_one_hots, val_label)
-        )
+        for model in self.models:
+            model.fit(
+                x=one_hots,
+                y=labels,
+                batch_size=256,
+                epochs=epochs,
+            )
 
-    def _create_cnn(self, seq_len, alphabet):
-        return tf.keras.models.Sequential([
+    def _create_cnn(self, lr):
+        model = tf.keras.models.Sequential([
             tf.keras.layers.Conv1D(
                 32,
                 5,
                 padding="valid",
                 activation="relu",
                 strides=1,
-                input_shape=(seq_len, len(alphabet)),
+                input_shape=(self.seq_len, len(self.alphabet)),
             ),
             tf.keras.layers.Conv1D(
                 32,
@@ -104,12 +102,26 @@ class CNNEnsemble(flexs.Model):
             ),
             tf.keras.layers.GlobalMaxPooling1D(),
             tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dense(1),
+            tf.keras.layers.Dense(1, activation="sigmoid"),
         ])
 
-    def _fitness_function(self, sequences):
-        one_hots = = self._seqs_to_tensor(sequences)
-
-        return np.nan_to_num(
-            self.model.predict(one_hots, batch_size=self.batch_size).squeeze(axis=1)
+        model.compile(
+            loss=tf.keras.losses.BinaryCrossentropy(),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+            metrics=['mse']
         )
+
+        return model
+
+
+    def _fitness_function(self, sequences):
+        one_hots = self._seqs_to_tensor(sequences)
+
+        arrs = []
+        for model in self.models:
+            arrs.append(np.nan_to_num(
+                model.predict(one_hots, batch_size=256).T
+            ))
+
+        preds = np.vstack(arrs).mean(axis=0)
+        return preds
