@@ -174,6 +174,28 @@ class DynaPPOEnsemble(flexs.Model):
 
         return preds.mean(axis=0), preds.std(axis=0)
 
+class DummySeqLenRewardEnsemble(flexs.Model):
+    def __init__(
+        self,
+        seq_len: int,
+        alphabet: str,
+        r_squared_threshold: float = 0.5,
+        models: Optional[List[flexs.Model]] = None,
+    ):
+        """Create the ensemble from `models`."""
+        super().__init__(name="DummySeqLenRewardEnsemble")
+
+    def _train(self, sequences, labels):
+        return
+
+    def _fitness_function(self, sequences):
+        return np.array([len(seq) for seq in sequences], dtype=np.float32)
+
+    def _fitness_function_uncert(self, sequences):
+        return (
+            np.array([len(seq) for seq in sequences], dtype=np.float32),
+            np.zeros(len(sequences), dtype=np.float32)
+        )
 
 class DynaPPO(flexs.Explorer):
     """
@@ -211,6 +233,11 @@ class DynaPPO(flexs.Explorer):
         num_model_rounds: int = 1,
         env_batch_size: int = 4,
         min_proposal_seq_len: int = 7,
+        lr=1e-4,
+        agent_train_epochs=10,
+        penalty_scale = 0.1,
+        distance_radius = 2,
+        use_dummy_model=False
     ):
         """
         Args:
@@ -225,10 +252,17 @@ class DynaPPO(flexs.Explorer):
         name = f"DynaPPO_Agent_{num_experiment_rounds}_{num_model_rounds}"
 
         if model is None:
-            model = DynaPPOEnsemble(
-                len(starting_sequence),
-                alphabet,
-            )
+            if use_dummy_model:
+                model = DummySeqLenRewardEnsemble(
+                    len(starting_sequence),
+                    alphabet,
+                )
+
+            else:
+                model = DynaPPOEnsemble(
+                    len(starting_sequence),
+                    alphabet,
+                )
             # Some models in the ensemble need to be trained on dummy dataset before
             # they can predict
             #model.train(
@@ -253,7 +287,13 @@ class DynaPPO(flexs.Explorer):
         self.min_proposal_seq_len = min_proposal_seq_len
 
         env = DynaPPOStoppableEnv(
-            self.alphabet, len(starting_sequence), model, landscape, env_batch_size
+            self.alphabet,
+            len(starting_sequence),
+            model,
+            landscape,
+            env_batch_size,
+            penalty_scale=penalty_scale,
+            distance_radius=distance_radius
         )
         self.tf_env = tf_py_environment.TFPyEnvironment(env)
 
@@ -270,10 +310,10 @@ class DynaPPO(flexs.Explorer):
         self.agent = ppo_agent.PPOAgent(
             time_step_spec=self.tf_env.time_step_spec(),
             action_spec=self.tf_env.action_spec(),
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
             actor_net=actor_net,
             value_net=value_net,
-            num_epochs=10,
+            num_epochs=agent_train_epochs,
             summarize_grads_and_vars=False,
         )
         self.agent.initialize()
@@ -373,6 +413,12 @@ class DynaPPO(flexs.Explorer):
                     break
 
             trajectories = replay_buffer.gather_all()
+            rewards = trajectories.reward.numpy()[0]
+            mask = trajectories.is_last().numpy()[0]
+
+            masked_reward = rewards[mask]
+            mean_reward = masked_reward.mean()
+
             self.agent.train(experience=trajectories)
             replay_buffer.clear()
             self.inner_rounds_iter += 1

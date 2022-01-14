@@ -76,6 +76,8 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         )
         self._time_step_spec = ts.time_step_spec(self._observation_spec)
 
+        super().__init__()
+
     def _reset(self):
         self.partial_seq_len = 0
         self.states[:, :, :] = 0
@@ -84,6 +86,7 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
             [ts.restart(seq_state) for seq_state in self.states]
         )
 
+    @property
     def batched(self):
         """Tf-agents function that says that this env returns batches of timesteps."""
         return True
@@ -189,6 +192,8 @@ class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable
         model: flexs.Model,
         landscape: flexs.Landscape,
         batch_size: int,
+        penalty_scale = 0.1,
+        distance_radius = 2
     ):
         super().__init__(alphabet, seq_length, model, landscape, batch_size)
 
@@ -203,10 +208,26 @@ class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable
         self.stop_action = len(alphabet)
 
         self.terminal_transitions = {}
+        self.lam = penalty_scale
+        self.dist_radius = distance_radius
 
     def _reset(self):
         self.terminal_transitions = {}
         return super()._reset()
+
+    def sequence_density(self, seq):
+        """Get average distance to `seq` out of all observed sequences."""
+        dens = 0
+        exactly_eq = False
+        for s in self.all_seqs:
+            dist = int(editdistance.eval(s, seq))
+            if dist <= self.dist_radius:
+                dens += self.all_seqs[s] / (dist + 1)
+            #elif dist == 0:
+            #    exactly_eq = True
+            #    break
+
+        return dens if not exactly_eq else np.inf
 
     def _compute_rewards_non_empty(self, seqs):
         if len(seqs) == 0:
@@ -274,18 +295,21 @@ class DynaPPOEnvironmentStoppableEpisode(DynaPPOEnvironment):  # pylint: disable
 
     def _step(self, actions):
         """Progress the agent one step in the environment."""
+        #if actions[0] == self.stop_action:
+        #    print('Agent stopped seq at action %d' % self.partial_seq_len)
+
         current_time_step = self.current_time_step()
         state_terminal_ind = current_time_step.is_last()
 
         active_seq_actions = actions.flatten()[~state_terminal_ind]
+        if len(active_seq_actions) != 0:
+            insert_action_idxs = tf.where(active_seq_actions != self.stop_action)
+            insert_action_idxs = insert_action_idxs.numpy().flatten()
+            insert_actions = active_seq_actions[insert_action_idxs]
 
-        insert_action_idxs = tf.where(active_seq_actions != self.stop_action)
-        insert_action_idxs = insert_action_idxs.numpy().flatten()
-        insert_actions = active_seq_actions[insert_action_idxs]
-
-        self.states[insert_action_idxs, self.partial_seq_len, -1] = 0
-        self.states[insert_action_idxs, self.partial_seq_len, insert_actions] = 1
-        self.partial_seq_len += 1
+            self.states[insert_action_idxs, self.partial_seq_len, -1] = 0
+            self.states[insert_action_idxs, self.partial_seq_len, insert_actions] = 1
+            self.partial_seq_len += 1
 
         compute_rewards_idx = self._get_should_compute_reward_idx(actions)
         rewards = self._compute_reward(self.states[compute_rewards_idx.numpy()])

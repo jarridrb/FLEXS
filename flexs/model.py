@@ -52,7 +52,6 @@ class Model(flexs.Landscape, abc.ABC):
             if best_score is None or mean_r_squared >= best_score:
                 best_score = mean_r_squared
                 best_conf = hparam_kwargs
-                break
 
         print('Had best R squared of %f for %s' % (best_score, self.name))
         self._train(sequences, labels, **best_conf)

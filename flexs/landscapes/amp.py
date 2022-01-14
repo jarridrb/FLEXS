@@ -84,3 +84,8 @@ class AMPLandscape(flexs.Landscape):
 
         return np.float32(scores)
 
+class DummySeqLenRewardingLandscape(AMPLandscape):
+    def _fitness_function(self, sequences):
+        scores = [len(seq) for seq in sequences]
+        return np.float32(scores)
+
