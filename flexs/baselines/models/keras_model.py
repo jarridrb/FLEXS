@@ -48,7 +48,7 @@ class KerasModel(flexs.Model):
         self.batch_size = batch_size
         self.seq_len = seq_len
 
-    def train(
+    def _train(
         self, sequences: SEQUENCES_TYPE, labels: np.ndarray, verbose: bool = False
     ):
         """Train keras model."""

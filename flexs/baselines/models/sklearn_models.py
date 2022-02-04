@@ -102,6 +102,63 @@ class SklearnClassifier(SklearnModel, abc.ABC):
         return self.model.predict_proba(flattened)[:, 1]
 
 
+class BayesianRidge(SklearnRegressor):
+    """Sklearn linear regression."""
+
+    def __init__(
+        self,
+        alphabet,
+        seq_len,
+        hparam_tune=False,
+        hparams_to_search={},
+        nfolds=None
+    ):
+        """Create linear regression model."""
+        model = sklearn.linear_model.BayesianRidge
+        self.could_not_fit = False
+        super().__init__(
+            model,
+            alphabet,
+            "bayesian_ridge",
+            seq_len,
+            hparam_tune,
+            hparams_to_search,
+            nfolds
+        )
+
+    def _train_hparam_setting(
+        self,
+        train_seq,
+        train_label,
+        val_seq,
+        val_labels,
+        **hparam_kwargs
+    ):
+        try:
+            return super()._train_hparam_setting(
+                train_seq,
+                train_label,
+                val_seq,
+                val_labels,
+                **hparam_kwargs
+            )
+        except:
+            self.could_not_fit = True
+            return sklearn.metrics.r2_score(val_labels, np.zeros(len(val_labels)))
+
+    def _train(self, sequences, labels, **hparam_kwargs):
+        try:
+            super()._train(sequences, labels, **hparam_kwargs)
+        except:
+            self.cound_not_fit = True
+
+    def _fitness_function(self, sequences):
+        if not self.could_not_fit:
+            return super()._fitness_function(sequences)
+        else:
+            return np.zeros(len(sequences))
+
+
 class LinearRegression(SklearnRegressor):
     """Sklearn linear regression."""
 

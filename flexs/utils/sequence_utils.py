@@ -7,11 +7,15 @@ import numpy as np
 AAS = "ILVAGMFYWEDQNHCRKSTP"
 """str: Amino acid alphabet for proteins (length 20 - no stop codon)."""
 
+DB_AAS = "ARNDCQEGHILKMFPSTWYV"
+
 RNAA = "UGCA"
 """str: RNA alphabet (4 base pairs)."""
 
-DNAA = "TGCA"
+DNAA = "ACGT"
 """str: DNA alphabet (4 base pairs)."""
+
+DNA_NUPACK = "ATCG"
 
 BA = "01"
 """str: Binary alphabet '01'."""

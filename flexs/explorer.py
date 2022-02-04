@@ -51,7 +51,10 @@ class Explorer(abc.ABC):
 
         """
         self.model = model
-        self.name = name
+        try:
+            self.name = name
+        except:
+            pass
 
         self.rounds = rounds
         self.sequences_batch_size = sequences_batch_size
@@ -89,7 +92,7 @@ class Explorer(abc.ABC):
         """
         pass
 
-    def _log(
+    def _log_cool(
         self,
         sequences_data: pd.DataFrame,
         metadata: Dict,
@@ -147,9 +150,10 @@ class Explorer(abc.ABC):
                 "measurement_cost": 1,
             }
         )
-        self._log(sequences_data, metadata, 0, verbose, time.time())
+        self._log_cool(sequences_data, metadata, 0, verbose, time.time())
 
         dataset = landscape.get_dataset()
+        this_batch = None
 
         # For each round, train model on available data, propose sequences,
         # measure them on the true landscape, add to available data, and repeat.
@@ -161,7 +165,11 @@ class Explorer(abc.ABC):
 
             self.model.train(all_X, all_y)
 
-            seqs, preds = self.propose_sequences(sequences_data)
+            seqs, preds = None, None
+            try:
+                seqs, preds = self.propose_sequences(sequences_data)#, this_batch)
+            except TypeError:
+                seqs, preds = self.propose_sequences(sequences_data, this_batch)
             true_score = landscape.get_fitness(seqs)
 
             if len(seqs) > self.sequences_batch_size:
@@ -171,18 +179,16 @@ class Explorer(abc.ABC):
 
             dataset.add((seqs, true_score))
 
-            sequences_data = sequences_data.append(
-                pd.DataFrame(
-                    {
-                        "sequence": seqs,
-                        "model_score": preds,
-                        "true_score": true_score,
-                        "round": r,
-                        "model_cost": self.model.cost,
-                        "measurement_cost": len(sequences_data) + len(seqs),
-                    }
-                )
-            )
-            self._log(sequences_data, metadata, r, verbose, round_start_time)
+            this_batch = pd.DataFrame({
+                "sequence": seqs,
+                "model_score": preds,
+                "true_score": true_score,
+                "round": r,
+                "model_cost": self.model.cost,
+                "measurement_cost": len(sequences_data) + len(seqs),
+            })
+
+            sequences_data = sequences_data.append(this_batch)
+            self._log_cool(sequences_data, metadata, r, verbose, round_start_time)
 
         return sequences_data, metadata

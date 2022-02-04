@@ -1,6 +1,7 @@
-"""Defines the AMP landscape."""
+#"""Defines the AMP landscape."""
 import numpy as np
 import flexs
+import flexs.utils.sequence_utils as s_utils
 from collections import namedtuple
 from clamp_common_eval.defaults import get_test_oracle
 from gflownet_generator.lib.dataset.classification import (
@@ -66,8 +67,23 @@ class AMPLandscape(flexs.Landscape):
             self.oracle
         )
 
+    @property
+    def length(self):
+        return 50
+
+    @property
+    def vocab_size(self):
+        return len(s_utils.AAS)
+
+    @property
+    def is_dynamic_length(self):
+        return True
+
     def get_dataset(self):
         return self.dataset
+
+    def get_full_dataset(self):
+        return self.dataset.get_full_dataset()
 
     def _fitness_function(self, sequences):
         sequences = np.array(sequences)

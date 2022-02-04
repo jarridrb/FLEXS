@@ -45,8 +45,9 @@ class DynaPPOEnsemble(flexs.Model):
         self,
         seq_len: int,
         alphabet: str,
-        r_squared_threshold: float = 0.5,
+        r_squared_threshold: float = 0.2,
         models: Optional[List[flexs.Model]] = None,
+        use_gaussian_process: bool = False,
     ):
         """Create the ensemble from `models`."""
         super().__init__(name="DynaPPOEnsemble")
@@ -65,10 +66,8 @@ class DynaPPOEnsemble(flexs.Model):
                     },
                     nfolds=5,
                 ),
-                baselines.models.SklearnRegressor(
-                    sklearn.linear_model.BayesianRidge,
+                baselines.models.BayesianRidge(
                     alphabet,
-                    "bayesian_ridge",
                     seq_len,
                     hparam_tune=True,
                     hparams_to_search={
@@ -102,17 +101,6 @@ class DynaPPOEnsemble(flexs.Model):
                     },
                     nfolds=5,
                 ),
-                #baselines.models.SklearnRegressor(
-                #    sklearn.gaussian_process.GaussianProcessRegressor,
-                #    alphabet,
-                #    "gaussian_process",
-                #    seq_len,
-                #    hparam_tune=True,
-                #    hparams_to_search={
-                #        'kernel': [RBF(), RationalQuadratic(), Matern()],
-                #    },
-                #    nfolds=5,
-                #),
                 baselines.models.SklearnRegressor(
                     sklearn.ensemble.GradientBoostingRegressor,
                     alphabet,
@@ -127,6 +115,21 @@ class DynaPPOEnsemble(flexs.Model):
                     nfolds=5,
                 ),
             ]
+
+            if use_gaussian_process:
+                models.append(
+                    baselines.models.SklearnRegressor(
+                        sklearn.gaussian_process.GaussianProcessRegressor,
+                        alphabet,
+                        "gaussian_process",
+                        seq_len,
+                        hparam_tune=True,
+                        hparams_to_search={
+                            'kernel': [RBF(), RationalQuadratic(), Matern()],
+                        },
+                        nfolds=5,
+                    )
+                )
 
         self.models = models
         self.r_squared_vals = np.ones(len(self.models))
@@ -167,7 +170,7 @@ class DynaPPOEnsemble(flexs.Model):
 
         if len(passing_models) == 0:
             val = np.argmax(self.r_squared_vals)
-            return self.models[val].get_fitness(sequences)
+            return self.models[val].get_fitness(sequences), np.zeros(len(sequences))
             #return self.models[np.argmax(self.r_squared_vals)].get_fitness(sequences)
 
         preds = np.array([model.get_fitness(sequences) for model in passing_models])
@@ -237,7 +240,9 @@ class DynaPPO(flexs.Explorer):
         agent_train_epochs=10,
         penalty_scale = 0.1,
         distance_radius = 2,
-        use_dummy_model=False
+        use_dummy_model=False,
+        use_gaussian_process=False,
+        use_stoppable_env=True,
     ):
         """
         Args:
@@ -260,8 +265,10 @@ class DynaPPO(flexs.Explorer):
 
             else:
                 model = DynaPPOEnsemble(
-                    len(starting_sequence),
+                    60,
+                    #len(starting_sequence),
                     alphabet,
+                    use_gaussian_process=use_gaussian_process,
                 )
             # Some models in the ensemble need to be trained on dummy dataset before
             # they can predict
@@ -286,7 +293,8 @@ class DynaPPO(flexs.Explorer):
         self.env_batch_size = env_batch_size
         self.min_proposal_seq_len = min_proposal_seq_len
 
-        env = DynaPPOStoppableEnv(
+        env_type = DynaPPOStoppableEnv if use_stoppable_env else DynaPPOEnv
+        env = env_type(
             self.alphabet,
             len(starting_sequence),
             model,
@@ -323,6 +331,9 @@ class DynaPPO(flexs.Explorer):
         self.highest_uncert = 0.0
         self.uncert_thresh = 0.5
 
+        self.dataset_seqs = set(landscape.get_full_dataset()[0])
+        print('heyo')
+
     def add_last_seq_in_trajectory(self, experience, new_seqs):
         """Add the last sequence in an episode's trajectory.
 
@@ -334,10 +345,10 @@ class DynaPPO(flexs.Explorer):
         to the next one in `last_batch`, so that when the environment resets, mutants
         are generated from that new sequence.
         """
-        for is_bound, obs in zip(experience.is_boundary(), experience.observation):
+        for is_bound, obs, reward in zip(experience.is_boundary(), experience.observation, experience.reward):
             if is_bound:
                 seq = s_utils.one_hot_to_string(obs.numpy(), self.alphabet)
-                new_seqs[seq] = self.tf_env.get_cached_fitness(seq)
+                new_seqs[seq] = reward.numpy()
 
                 if self.tf_env.fitness_model_is_gt:
                     continue
@@ -388,7 +399,7 @@ class DynaPPO(flexs.Explorer):
         ):
             collect_driver.run()
 
-        tf_agents.policies.tf_policy.num_iters += 1
+        #tf_agents.policies.tf_policy.num_iters += 1
 
         trajectories = replay_buffer.gather_all()
         self.agent.train(experience=trajectories)
@@ -424,19 +435,33 @@ class DynaPPO(flexs.Explorer):
             self.inner_rounds_iter += 1
 
 
-        measured_seqs = set(measured_sequences_data["sequence"])
+        measured_seqs = self.dataset_seqs.union(set(measured_sequences_data["sequence"]))
         is_usable_seq = (
             lambda x: x not in measured_seqs and self._is_seq_long_enough(x)
         )
 
         # We propose the top `self.sequences_batch_size` new sequences we have generated
-        sequences = {
+        to_propose = {
             seq: fitness
             for seq, fitness in sequences.items()
             if is_usable_seq(seq)
         }
-        new_seqs = np.array(list(sequences.keys()))
-        preds = np.array(list(sequences.values()))
+
+        while len(to_propose) < self.sequences_batch_size:
+            previous_round_model_cost = self.model.cost
+            while self.model.cost - previous_round_model_cost < int(
+                self.model_queries_per_batch / self.num_model_rounds
+            ):
+                collect_driver.run()
+
+            to_propose = {
+                seq: fitness
+                for seq, fitness in sequences.items()
+                if is_usable_seq(seq)
+            }
+
+        new_seqs = np.array(list(to_propose.keys()))
+        preds = np.array(list(to_propose.values()))
         sorted_order = np.argsort(preds)[::-1][: self.sequences_batch_size]
 
         return new_seqs[sorted_order], preds[sorted_order]

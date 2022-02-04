@@ -69,6 +69,7 @@ class CNNEnsemble(flexs.Model):
 
     def _train(self, sequences, labels, **hparam_kwargs):
         epochs, lr = hparam_kwargs['epochs'], hparam_kwargs['lr']
+        print('Best epochs: %d, best lr: %f' % (epochs, lr))
 
         self._create_ensemble(lr)
 
@@ -102,11 +103,11 @@ class CNNEnsemble(flexs.Model):
             ),
             tf.keras.layers.GlobalMaxPooling1D(),
             tf.keras.layers.Dense(128, activation="relu"),
-            tf.keras.layers.Dense(1, activation="sigmoid"),
+            tf.keras.layers.Dense(1)#, activation="sigmoid"),
         ])
 
         model.compile(
-            loss=tf.keras.losses.BinaryCrossentropy(),
+            loss='MSE',#tf.keras.losses.BinaryCrossentropy(),
             optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
             metrics=['mse']
         )

@@ -21,6 +21,8 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         model: flexs.Model,
         landscape: flexs.Landscape,
         batch_size: int,
+        penalty_scale = 0.1,
+        distance_radius = 2
     ):
         """
         Initialize DyNA-PPO agent environment.
@@ -40,6 +42,8 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         """
         self.alphabet = alphabet
         self._batch_size = batch_size
+        self.lam = penalty_scale
+        self.dist_radius = distance_radius
 
         self.seq_length = seq_length
         self.partial_seq_len = 0
@@ -111,11 +115,10 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
     def sequence_density(self, seq):
         """Get average distance to `seq` out of all observed sequences."""
         dens = 0
-        dist_radius = 2
         exactly_eq = False
         for s in self.all_seqs:
             dist = int(editdistance.eval(s, seq))
-            if dist <= dist_radius:
+            if dist <= self.dist_radius:
                 dens += self.all_seqs[s] / (dist + 1)
             #elif dist == 0:
             #    exactly_eq = True
@@ -139,46 +142,66 @@ class DynaPPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
         """
         self.fitness_model_is_gt = fitness_model_is_gt
 
-    def _step(self, actions):
-        """Progress the agent one step in the environment."""
-        actions = actions.flatten()
-        self.states[:, self.partial_seq_len, -1] = 0
-        self.states[np.arange(self._batch_size), self.partial_seq_len, actions] = 1
-        self.partial_seq_len += 1
+    def _compute_rewards_non_empty(self, seqs):
+        if len(seqs) == 0:
+            return []
 
-        # We have not generated the last residue in the sequence, so continue
-        if self.partial_seq_len < self.seq_length - 1:
-            return nest_utils.stack_nested_arrays(
-                [ts.transition(seq_state, 0) for seq_state in self.states]
-            )
+        if self.fitness_model_is_gt:
+            fitnesses = self.landscape.get_fitness(seqs)
+        else:
+            fitnesses, uncerts = self.model.get_fitness(seqs, compute_uncert=True)
 
-        # If sequence is of full length, score the sequence and end the episode
-        # We need to take off the column in the matrix (-1) representing the mask token
+        # Reward = fitness - lambda * sequence density
+        penalty = np.zeros(len(seqs))
+        if not np.isclose(0., self.lam):
+            penalty = np.array([
+                self.lam * self.sequence_density(seq)
+                for seq in seqs
+            ])
+
+        self.all_seqs.update(zip(seqs, fitnesses))
+        if not self.fitness_model_is_gt:
+            self.all_seqs_uncert.update(zip(seqs, uncerts))
+
+        rewards = fitnesses - penalty
+        return rewards
+
+    def _compute_reward(self):
+        if len(self.states.shape) == 2:
+            seqs_to_compute = np.expand_dims(seqs_to_compute, axis=0)
+
         complete_sequences = [
             s_utils.one_hot_to_string(seq_state[:, :-1], self.alphabet)
             for seq_state in self.states
         ]
-        if self.fitness_model_is_gt:
-            fitnesses = self.landscape.get_fitness(complete_sequences)
-        else:
-            fitnesses, uncerts = self.model.get_fitness(
-                complete_sequences,
-                compute_uncert=True
+
+        to_compute = list(filter(lambda x: x != '', complete_sequences))
+        non_empty_seqs_rewards = self._compute_rewards_non_empty(to_compute)
+
+        i, rewards = 0, np.zeros(len(complete_sequences))
+        for j, seq in enumerate(complete_sequences):
+            if seq:
+                rewards[j] = non_empty_seqs_rewards[i]
+                i += 1
+
+        return rewards
+
+    def _step(self, actions):
+        """Progress the agent one step in the environment."""
+        if self.partial_seq_len != self.seq_length:
+            actions = actions.flatten()
+            self.states[:, self.partial_seq_len, -1] = 0
+            self.states[np.arange(self._batch_size), self.partial_seq_len, actions] = 1
+
+        self.partial_seq_len += 1
+
+        # We have not generated the last residue in the sequence, so continue
+        if self.partial_seq_len < self.seq_length:
+            return nest_utils.stack_nested_arrays(
+                [ts.transition(seq_state, 0) for seq_state in self.states]
             )
 
-        self.all_seqs.update(zip(complete_sequences, fitnesses))
-        if not self.fitness_model_is_gt:
-            self.all_seqs_uncert.update(zip(complete_sequences, uncerts))
-
-        # Reward = fitness - lambda * sequence density
-        penalty = np.zeros(len(complete_sequences))
-        if not np.isclose(0., self.lam):
-            penalty = np.array([
-                self.lam * self.sequence_density(seq)
-                for seq in complete_sequences
-            ])
-
-        rewards = fitnesses - penalty
+        rewards = self._compute_reward()
         return nest_utils.stack_nested_arrays(
             [ts.termination(seq_state, r) for seq_state, r in zip(self.states, rewards)]
         )
